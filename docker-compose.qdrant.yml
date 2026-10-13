@@ -1,0 +1,30 @@
+# Keep the schema vectors in a Qdrant server instead of the app's memory:
+#   docker compose -f docker-compose.yml -f docker-compose.qdrant.yml up --build
+#
+# Worth it for large schemas (hundreds of tables and more): the vectors persist in the
+# `qdrant` volume, so a restart re-embeds only the tables that changed, and several app
+# replicas can share one index. For the 30 demo tables the in-memory NumPy store is as
+# good. Numbers: eval/benchmark_scale.py and the README.
+# Qdrant gets no published port: only the app reaches it, inside this network.
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.19.0
+    volumes:
+      - qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "bash", "-c", ":> /dev/tcp/127.0.0.1/6333"]  # the image has no curl
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  app:
+    environment:
+      VECTOR_STORE: qdrant
+      QDRANT_URL: http://qdrant:6333
+    depends_on:
+      qdrant:
+        condition: service_healthy
+
+volumes:
+  qdrant:

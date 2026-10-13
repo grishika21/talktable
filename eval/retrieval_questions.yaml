@@ -1,0 +1,73 @@
+# Held-out questions for the schema-retrieval benchmark (eval/benchmark_retrieval.py).
+#
+# They are worded differently from the sample questions in data/descriptions.yaml, so a
+# good score means retrieval generalises rather than memorising. `tables` lists every
+# table the query needs, join tables included.
+
+questions:
+  # --- sqlite: the catalog ---------------------------------------------------
+  - {q: "List the authors born after 1980.", db: sqlite, tables: [authors]}
+  - {q: "How many titles does each genre contain?", db: sqlite, tables: [books, categories]}
+  - {q: "Show the five cheapest books in the catalog.", db: sqlite, tables: [books]}
+  - {q: "Which country do most of our writers come from?", db: sqlite, tables: [authors]}
+  - {q: "Which publishing houses were founded before 1950?", db: sqlite, tables: [publishers]}
+  - {q: "How many paperback editions came out in 2023?", db: sqlite, tables: [editions]}
+  - {q: "What is the ISBN of each hardcover edition of book 12?", db: sqlite, tables: [editions]}
+  - {q: "Which publisher released the most ebook editions?", db: sqlite, tables: [editions, publishers]}
+  - {q: "List the books of each series in reading order.", db: sqlite, tables: [book_series, series, books]}
+  - {q: "Which literary prizes are run by organisations in France?", db: sqlite, tables: [awards]}
+  - {q: "How many books won a prize in 2023?", db: sqlite, tables: [book_awards]}
+  - {q: "Which genre has collected the most award wins?", db: sqlite, tables: [book_awards, books, categories]}
+  - {q: "Which books carry the 'beach read' label?", db: sqlite, tables: [book_tags, tags, books]}
+  - {q: "Which writer has the most books labelled 'classic'?", db: sqlite, tables: [book_tags, tags, books, authors]}
+  - {q: "Which publisher has the most prize-winning books?", db: sqlite, tables: [publishers, editions, book_awards]}
+  - {q: "What is the average page count of Science Fiction books?", db: sqlite, tables: [books, categories]}
+
+  # --- postgres: sales -------------------------------------------------------
+  - {q: "How many new customers joined last year?", db: postgres, tables: [customers]}
+  - {q: "Which shoppers live in Berlin?", db: postgres, tables: [customers]}
+  - {q: "What was the average order value in March 2025?", db: postgres, tables: [orders]}
+  - {q: "How many orders were cancelled each month?", db: postgres, tables: [orders]}
+  - {q: "What share of payments failed?", db: postgres, tables: [payments]}
+  - {q: "How much was paid by PayPal in 2025?", db: postgres, tables: [payments]}
+  - {q: "Which shipping company has the most late deliveries?", db: postgres, tables: [shipments, carriers]}
+  - {q: "How many parcels have not arrived yet?", db: postgres, tables: [shipments]}
+  - {q: "Why do customers send books back?", db: postgres, tables: [returns]}
+  - {q: "What is the total refund value per return reason?", db: postgres, tables: [returns]}
+  - {q: "Which discount codes expire this month?", db: postgres, tables: [coupons]}
+  - {q: "How much revenue came from orders that used a discount code?", db: postgres, tables: [orders, order_coupons]}
+  - {q: "Which stock locations are in Germany?", db: postgres, tables: [warehouses]}
+  - {q: "How many copies are stored in each warehouse?", db: postgres, tables: [inventory, warehouses]}
+  - {q: "Which titles need restocking?", db: postgres, tables: [inventory]}
+  - {q: "How many platinum members are there?", db: postgres, tables: [loyalty_accounts]}
+  - {q: "Which customers have the most reward points?", db: postgres, tables: [loyalty_accounts, customers]}
+  - {q: "What are the most common complaint categories?", db: postgres, tables: [support_tickets]}
+  - {q: "Which customers opened the most help-desk tickets?", db: postgres, tables: [support_tickets, customers]}
+  - {q: "How many units does an order contain on average?", db: postgres, tables: [order_items]}
+  - {q: "Which carrier shipped the most orders that were later returned?", db: postgres, tables: [returns, order_items, shipments, carriers]}
+  - {q: "What is the average support satisfaction score of gold tier members?", db: postgres, tables: [support_tickets, loyalty_accounts]}
+
+  # --- mongo: engagement -----------------------------------------------------
+  - {q: "Which books get the lowest star ratings?", db: mongo, tables: [reviews]}
+  - {q: "Which reviews were voted most helpful?", db: mongo, tables: [reviews]}
+  - {q: "How many browsing sessions used a tablet?", db: mongo, tables: [clickstream]}
+  - {q: "Which titles get viewed the most?", db: mongo, tables: [clickstream]}
+  - {q: "Which books do customers save for later most often?", db: mongo, tables: [wishlists]}
+  - {q: "Which search terms find nothing?", db: mongo, tables: [search_logs]}
+  - {q: "Which recommendation model produces the most lists?", db: mongo, tables: [recommendations]}
+  - {q: "Which book is suggested in first place most often?", db: mongo, tables: [recommendations]}
+  - {q: "What was the click-through rate of each newsletter?", db: mongo, tables: [email_campaigns]}
+  - {q: "Which email theme reached the largest audience?", db: mongo, tables: [email_campaigns]}
+
+# Messages that are not about the data: their best match should stay below MIN_RELEVANCE.
+off_topic:
+  - "tell me a joke"
+  - "what's the weather in Paris?"
+  - "who won the football world cup?"
+  - "write a poem about cats"
+  - "what is 2 + 2?"
+  - "how do I bake sourdough bread?"
+  - "explain quantum physics simply"
+  - "what is the capital of Australia?"
+  - "recommend a good movie"
+  - "how are you today?"

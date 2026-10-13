@@ -1,0 +1,21 @@
+# Use an Ollama that already runs on this machine (and its downloaded models) instead of
+# the bundled one:
+#   docker compose -f docker-compose.yml -f docker-compose.host-ollama.yml up --build
+#
+# Docker Desktop (macOS / Windows) works as is. That's also the best choice on a Mac, where
+# a native Ollama can use the GPU and one inside Docker can't.
+# Linux: Ollama listens only on 127.0.0.1 by default, which containers can't reach. Make it
+# listen on all interfaces: run `sudo systemctl edit ollama`, add the two lines below, then
+# `sudo systemctl restart ollama`. Keep port 11434 closed in your firewall.
+#   [Service]
+#   Environment="OLLAMA_HOST=0.0.0.0"
+services:
+  ollama:
+    profiles: [bundled-ollama]  # not started
+  ollama-pull:
+    profiles: [bundled-ollama]  # not started
+  app:
+    environment:
+      OLLAMA_BASE_URL: ${TALKTABLE_OLLAMA_URL:-http://host.docker.internal:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

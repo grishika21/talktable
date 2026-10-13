@@ -1,0 +1,132 @@
+# TalkTable, fully local: the app, PostgreSQL, MongoDB and Ollama with one command.
+#
+#   docker compose up --build        then open http://127.0.0.1:7860
+#                                    (MCP endpoint: http://127.0.0.1:7860/gradio_api/mcp)
+#
+# The first run downloads the LLM models into a volume (~14 GB for the defaults).
+# Variations (details in docs/docker.md):
+#   NVIDIA GPU:           docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+#   Ollama already
+#   installed locally:    docker compose -f docker-compose.yml -f docker-compose.host-ollama.yml up --build
+#   Other models:         TALKTABLE_LLM_MODEL=qwen2.5-coder:7b TALKTABLE_QUERY_MODEL=qwen2.5-coder:7b docker compose up
+#   Qdrant server for
+#   the schema vectors:   docker compose -f docker-compose.yml -f docker-compose.qdrant.yml up --build
+#
+# The databases get no published ports: only the app reaches them, inside this network,
+# and it connects with read-only users. The passwords are local defaults. Override the
+# TALKTABLE_* variables before exposing anything beyond your own machine.
+
+name: talktable
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: bookstore
+      POSTGRES_USER: talktable
+      POSTGRES_PASSWORD: ${TALKTABLE_PG_PASSWORD:-talktable_dev}
+      TALKTABLE_RO_PASSWORD: ${TALKTABLE_RO_PASSWORD:-talktable_ro_dev}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init.sh:/docker-entrypoint-initdb.d/10-readonly-user.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U talktable -d bookstore"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:8.0
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: ${TALKTABLE_MONGO_ROOT_PASSWORD:-root_dev}
+      MONGO_INITDB_DATABASE: bookstore
+      TALKTABLE_RO_PASSWORD: ${TALKTABLE_RO_PASSWORD:-talktable_ro_dev}
+    volumes:
+      - mongodata:/data/db
+      - ./docker/mongo-init.js:/docker-entrypoint-initdb.d/10-readonly-user.js:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  # Fills Postgres and Mongo with the demo data (deterministic, so re-running is harmless),
+  # then exits. The SQLite catalog ships inside the image.
+  seed:
+    image: talktable:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["python", "-m", "data.seed.seed_all", "postgres", "mongo"]
+    environment:
+      POSTGRES_SEED_URL: postgresql://talktable:${TALKTABLE_PG_PASSWORD:-talktable_dev}@postgres:5432/bookstore
+      MONGO_SEED_URL: mongodb://root:${TALKTABLE_MONGO_ROOT_PASSWORD:-root_dev}@mongo:27017/?authSource=admin
+      MONGO_DB: bookstore
+      CACHE_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    restart: "no"
+
+  ollama:
+    image: ollama/ollama:0.30.7
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  # Downloads the models once (they stay in the `ollama` volume), then exits.
+  ollama-pull:
+    image: ollama/ollama:0.30.7
+    entrypoint: ["/bin/sh", "-c"]
+    command: ['ollama pull "$$LLM_MODEL" && ollama pull "$$LLM_QUERY_MODEL"']
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      LLM_MODEL: ${TALKTABLE_LLM_MODEL:-qwen3:14b}
+      LLM_QUERY_MODEL: ${TALKTABLE_QUERY_MODEL:-qwen2.5-coder:7b}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    image: talktable:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    environment:
+      POSTGRES_URL: postgresql://talktable_ro:${TALKTABLE_RO_PASSWORD:-talktable_ro_dev}@postgres:5432/bookstore
+      MONGO_URL: mongodb://talktable_ro:${TALKTABLE_RO_PASSWORD:-talktable_ro_dev}@mongo:27017/?authSource=bookstore
+      MONGO_DB: bookstore
+      LLM_PROVIDER: ollama
+      LLM_MODEL: ${TALKTABLE_LLM_MODEL:-qwen3:14b}
+      LLM_QUERY_MODEL: ${TALKTABLE_QUERY_MODEL:-qwen2.5-coder:7b}
+      OLLAMA_BASE_URL: http://ollama:11434
+      CACHE_PATH: /data/answer_cache.sqlite
+      QDRANT_PATH: /data/qdrant  # used only if VECTOR_STORE=qdrant without a QDRANT_URL
+    volumes:
+      - appdata:/data
+    ports:
+      - "127.0.0.1:${TALKTABLE_PORT:-7860}:7860"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      ollama-pull:
+        condition: service_completed_successfully
+        required: false  # absent when using an Ollama outside compose
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  mongodata:
+  ollama:
+  appdata:

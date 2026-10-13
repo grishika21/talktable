@@ -1,0 +1,336 @@
+<!doctype html>
+<!--
+  TalkTable feature flow: the source of docs/flow.png.
+  Open it in a browser to view or edit; the arrows are drawn by the script at the bottom,
+  from the positions of the boxes, so boxes can be moved or reworded freely.
+  To re-render the PNG, screenshot #canvas at 2x (e.g. Chrome DevTools: "Capture node screenshot").
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TalkTable: how it works</title>
+<style>
+  :root {
+    --bg: #0b1220; --panel: #0f182a; --card: #131d31; --line: #8193ad; --text: #e6ebf3; --muted: #a9b6c9;
+    --entry: #60a5fa; --llm: #a78bfa; --retrieval: #00d4aa; --safety: #f87171; --check: #fbbf24; --data: #34d399;
+    --neutral: #94a3b8;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); font-family: "Segoe UI", Inter, "Helvetica Neue", Arial, sans-serif; color: var(--text); }
+  #canvas { position: relative; width: 1680px; padding: 34px 40px 30px; background: var(--bg); }
+
+  header { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 26px; }
+  header h1 { margin: 0; font-size: 38px; letter-spacing: -0.5px; }
+  header h1 span { color: var(--retrieval); }
+  header .tagline { margin-top: 6px; font-size: 16px; color: var(--muted); }
+  .stats { display: flex; gap: 10px; }
+  .stat { border: 1px solid #2a3a55; background: var(--panel); border-radius: 999px; padding: 7px 14px; font-size: 13.5px; color: var(--muted); }
+  .stat b { color: var(--text); }
+
+  .label { font-size: 12px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; color: var(--neutral); margin: 0 0 10px 2px; }
+  .row { display: grid; gap: 44px; }
+  .row.c4 { grid-template-columns: repeat(4, 1fr); }
+  .row.c5 { grid-template-columns: repeat(5, 1fr); }
+  .row.c3 { grid-template-columns: repeat(3, 1fr); }
+
+  .box { position: relative; background: var(--card); border: 1.5px solid #26344c; border-left: 5px solid var(--c);
+         border-radius: 12px; padding: 13px 15px 12px; min-height: 96px; }
+  .box h3 { margin: 0 0 5px; font-size: 16.5px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+  .box p { margin: 2px 0 0; font-size: 13px; line-height: 1.38; color: var(--muted); }
+  .box p.note { color: #c8d2e0; }
+  .box code, .bar code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12.5px; color: #d6deea; }
+  .num { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--c); color: #0b1220;
+         font-size: 13px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; }
+  .entry { --c: var(--entry); } .llm { --c: var(--llm); } .retrieval { --c: var(--retrieval); }
+  .safety { --c: var(--safety); } .check { --c: var(--check); } .data { --c: var(--data); } .neutral { --c: var(--neutral); }
+  .tag { font-size: 11px; font-weight: 700; letter-spacing: .6px; color: var(--c); border: 1px solid var(--c);
+         border-radius: 6px; padding: 1px 6px; margin-left: auto; opacity: .9; }
+
+  .bar { margin: 40px 0 0; display: flex; align-items: center; gap: 18px; background: #11203a; border: 1.5px solid #2f4a75;
+         border-radius: 12px; padding: 12px 18px; font-size: 15px; }
+  .bar b { font-size: 16px; }
+  .bar .pill { background: #0b1628; border: 1px solid #2f4a75; border-radius: 8px; padding: 3px 9px; }
+  .bar .pill.main { border-color: var(--retrieval); color: var(--retrieval); font-weight: 650; }
+  .bar .aside { margin-left: auto; color: var(--muted); font-size: 13px; }
+
+  .panel { margin-top: 44px; background: var(--panel); border: 1.5px solid #24324a; border-radius: 16px; padding: 18px 34px 30px; }
+  .panel-title { text-align: center; font-size: 15px; color: var(--muted); margin-bottom: 18px; }
+  .panel-title b { color: var(--text); font-family: Consolas, "Cascadia Mono", monospace; font-size: 15.5px; }
+  .gap { height: 62px; }
+  .sub { background: rgba(0, 212, 170, 0.055); border: 1.5px dashed rgba(0, 212, 170, 0.45); border-radius: 14px; padding: 12px 16px 16px; }
+  .sub-title { font-size: 15px; font-weight: 650; margin: 0 0 10px 2px; display: flex; align-items: center; gap: 8px; --c: var(--retrieval); }
+  .sub-title .what { font-weight: 400; color: var(--muted); }
+  .sub .box { background: #0f2230; }
+
+  .data-band { margin-top: 40px; }
+  .data-band .label { margin-bottom: 40px; }
+  .db { display: flex; gap: 14px; align-items: flex-start; }
+  .db svg { flex: none; margin-top: 2px; }
+
+  footer { margin-top: 34px; display: grid; grid-template-columns: 3fr 2fr; gap: 26px; }
+  .group { background: var(--panel); border: 1.5px solid #24324a; border-radius: 14px; padding: 14px 16px 16px; }
+  .group .row { gap: 14px; }
+  .group .box { min-height: 0; }
+  .legend { margin-top: 18px; display: flex; gap: 22px; justify-content: center; font-size: 13px; color: var(--muted); }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; background: var(--c); margin-right: 7px; vertical-align: -1px; }
+
+  #wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+  #wires text { font-size: 12.5px; fill: #c9d3e1; paint-order: stroke; stroke: var(--panel); stroke-width: 6px; stroke-linejoin: round; }
+</style>
+</head>
+<body>
+<div id="canvas">
+  <header>
+    <div>
+      <h1>Talk<span>Table</span></h1>
+      <div class="tagline">Ask SQLite, PostgreSQL and MongoDB in plain English, from a chat UI or any MCP client. Read-only by construction.</div>
+    </div>
+    <div class="stats">
+      <div class="stat"><b>3</b> databases · <b>30</b> tables</div>
+      <div class="stat"><b>517</b> tests</div>
+      <div class="stat"><b>96%</b> schema recall up to <b>3,030</b> tables</div>
+    </div>
+  </header>
+
+  <div class="label">Ways in</div>
+  <div class="row c4">
+    <div class="box entry" id="ui"><h3>Gradio chat UI</h3>
+      <p>live progress · generated query · results table</p>
+      <p class="note">follow-up questions · ⚡ cached badge · ask again fresh</p></div>
+    <div class="box entry" id="mcps"><h3>MCP server (stdio)</h3>
+      <p>Claude Desktop · Cursor · MCP Inspector</p>
+      <p class="note">progress heartbeats · read-only tool hints</p></div>
+    <div class="box entry" id="mcpr"><h3>Remote MCP endpoint</h3>
+      <p><code>/gradio_api/mcp</code> on the Hugging Face Space</p>
+      <p class="note">the same tools over HTTP</p></div>
+    <div class="box entry" id="cli"><h3>Command line</h3>
+      <p>one question, or a <code>--chat</code> session</p>
+      <p class="note"><code>--status</code> · <code>--no-cache</code></p></div>
+  </div>
+
+  <div class="bar" id="tools">
+    <b>5 MCP tools</b>
+    <span class="pill">list_databases</span><span class="pill">get_schema</span><span class="pill main">ask</span>
+    <span class="pill">run_sql</span><span class="pill">run_mongo</span>
+    <span class="aside"><code>run_sql</code> / <code>run_mongo</code>: your own query, straight to the guardrails <span class="num safety" style="width:20px;height:20px;font-size:11.5px;vertical-align:1px">4</span></span>
+  </div>
+
+  <div class="panel" id="pipe">
+    <div class="panel-title"><b>ask(question)</b> · one fixed pipeline; the LLM fills in three of its steps and never decides what runs next</div>
+
+    <div class="row c5" id="lane1">
+      <div class="box neutral" id="q"><h3>Question</h3>
+        <p>plus the last 3 turns of the chat</p>
+        <p class="note">up to 500 characters</p></div>
+      <div class="box check" id="small"><h3>Small talk?</h3>
+        <p>"hi", "thanks", "bye" answered instantly</p>
+        <p class="note">no LLM call, no query: a short "here's what I can answer"</p></div>
+      <div class="box llm" id="cond"><h3>Follow-up rewriter</h3>
+        <p>"and in 2024?" → a standalone question</p>
+        <p class="note">shown in the UI as "Interpreted as …"</p></div>
+      <div class="box check" id="cache"><h3>Answer cache</h3>
+        <p>same numbers, names and meaning words, plus similarity ≥ 0.80</p>
+        <p class="note">hit → re-runs the saved query on today's data, no LLM (42 s → 0 s)</p></div>
+      <div class="box llm" id="router"><h3><span class="num">1</span>Router</h3>
+        <p>qwen3:14b picks the database</p>
+        <p class="note">fallback: best-matching table · off-topic questions get the friendly reply</p></div>
+    </div>
+
+    <div class="gap"></div>
+
+    <div class="sub" id="lane2box">
+      <div class="sub-title"><span class="num">2</span>Schema retrieval <span class="what">· only the tables this question needs reach the LLM</span></div>
+      <div class="row c4" id="lane2">
+        <div class="box retrieval" id="vec"><h3>Multi-vector search</h3>
+          <p>each table's description + each of its sample questions (all-MiniLM-L6-v2)</p>
+          <p class="note"><b>NumPy</b> for small schemas · <b>Qdrant</b> for large: persistent, re-embeds only changes</p></div>
+        <div class="box retrieval" id="graph"><h3>Join paths · NetworkX</h3>
+          <p>foreign keys as a graph; bridge tables found by shortest paths (Steiner tree)</p>
+          <p class="note">exact join conditions written into the prompt</p></div>
+        <div class="box retrieval" id="budget"><h3>Token budget</h3>
+          <p>linking tables in a one-line brief form, value hints kept</p>
+          <p class="note">~800 schema tokens at 30 or 3,030 tables (vs 140,000)</p></div>
+        <div class="box retrieval" id="examples"><h3>Examples + glossary</h3>
+          <p>3 closest of 25 verified question → query pairs</p>
+          <p class="note">business terms (revenue, bestseller, conversion …) defined once</p></div>
+      </div>
+    </div>
+
+    <div class="gap"></div>
+
+    <div class="row c5" id="lane3">
+      <div class="box llm" id="gen"><h3><span class="num">3</span>Query writer</h3>
+        <p>qwen2.5-coder:7b writes SQL or a MongoDB pipeline</p>
+        <p class="note">dialect-aware prompts: SQLite · PostgreSQL · MongoDB</p></div>
+      <div class="box safety" id="guard"><h3><span class="num">4</span>Guardrails</h3>
+        <p>sqlglot syntax tree: one SELECT, no writes or DDL, function denylist, LIMIT ≤ 200, SQL regenerated</p>
+        <p class="note">MongoDB: read-only stage allowlist</p></div>
+      <div class="box safety" id="exec"><h3><span class="num">5</span>Executor</h3>
+        <p>runs on read-only connections and users</p>
+        <p class="note">query timeouts · results capped at 200 rows</p></div>
+      <div class="box llm" id="explain"><h3><span class="num">6</span>Explainer</h3>
+        <p>qwen3:14b: 1–3 plain-English sentences</p>
+        <p class="note">every number checked against the rows; invented figures never shown</p></div>
+      <div class="box neutral" id="answer"><h3>Answer</h3>
+        <p>answer · query · rows · latency · retries</p>
+        <p class="note">saved to the answer cache</p></div>
+    </div>
+  </div>
+
+  <div class="data-band">
+    <div class="label" id="datalabel">Three read-only databases · 30 tables · linked by book_id and customer_id</div>
+    <div class="row c3">
+      <div class="box data db" id="sqlite"><svg width="34" height="40" viewBox="0 0 34 40"><g fill="none" stroke="#34d399" stroke-width="2"><ellipse cx="17" cy="7" rx="14" ry="5"/><path d="M3 7v26c0 2.8 6.3 5 14 5s14-2.2 14-5V7"/><path d="M3 20c0 2.8 6.3 5 14 5s14-2.2 14-5"/></g></svg>
+        <div><h3>SQLite · Book catalog</h3>
+          <p>11 tables: books, authors, editions, publishers, awards, series, tags</p>
+          <p class="note">opened read-only · query_only · an authorizer that allows only reads</p></div></div>
+      <div class="box data db" id="pg"><svg width="34" height="40" viewBox="0 0 34 40"><g fill="none" stroke="#34d399" stroke-width="2"><ellipse cx="17" cy="7" rx="14" ry="5"/><path d="M3 7v26c0 2.8 6.3 5 14 5s14-2.2 14-5V7"/><path d="M3 20c0 2.8 6.3 5 14 5s14-2.2 14-5"/></g></svg>
+        <div><h3>PostgreSQL · Sales</h3>
+          <p>13 tables: customers, orders, payments, shipments, returns, inventory, loyalty, support</p>
+          <p class="note">read-only role · READ ONLY transactions · statement timeout</p></div></div>
+      <div class="box data db" id="mongo"><svg width="34" height="40" viewBox="0 0 34 40"><g fill="none" stroke="#34d399" stroke-width="2"><ellipse cx="17" cy="7" rx="14" ry="5"/><path d="M3 7v26c0 2.8 6.3 5 14 5s14-2.2 14-5V7"/><path d="M3 20c0 2.8 6.3 5 14 5s14-2.2 14-5"/></g></svg>
+        <div><h3>MongoDB · Engagement</h3>
+          <p>6 collections: reviews, clickstream, wishlists, searches, recommendations, campaigns</p>
+          <p class="note">user with only the read role · aggregate() only · maxTimeMS</p></div></div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="group">
+      <div class="label">Runs anywhere</div>
+      <div class="row c3">
+        <div class="box neutral"><h3>Any LLM</h3><p>Ollama locally (qwen3:14b + qwen2.5-coder:7b), Groq or Hugging Face, through one OpenAI-compatible client</p></div>
+        <div class="box neutral"><h3>Docker Compose</h3><p>app + databases + Ollama in one command, with GPU, host-Ollama and Qdrant-server overrides</p></div>
+        <div class="box neutral"><h3>Hugging Face Space</h3><p>the chat UI and a remote MCP endpoint, with secrets kept in the Space settings</p></div>
+      </div>
+    </div>
+    <div class="group">
+      <div class="label">Tested and measured</div>
+      <div class="row" style="grid-template-columns: 1fr 1fr">
+        <div class="box neutral"><h3>517 tests</h3><p>194 guardrail attacks (stacked statements, DROP, $out …), data checked unchanged afterwards</p></div>
+        <div class="box neutral"><h3>Benchmarks</h3><p>48 held-out questions: routing fallback 85% → 94%, tables found 92% → 96%</p></div>
+      </div>
+    </div>
+  </footer>
+
+  <div class="legend">
+    <span class="entry"><i></i>ways in</span><span class="check"><i></i>checks</span><span class="llm"><i></i>LLM steps</span>
+    <span class="retrieval"><i></i>schema retrieval</span><span class="safety"><i></i>safety</span><span class="data"><i></i>data</span>
+  </div>
+
+  <svg id="wires"></svg>
+</div>
+
+<script>
+// Draws every arrow from the boxes' positions.
+const canvas = document.getElementById("canvas");
+const svg = document.getElementById("wires");
+const NS = "http://www.w3.org/2000/svg";
+
+function box(id) {
+  const r = document.getElementById(id).getBoundingClientRect(), c = canvas.getBoundingClientRect();
+  const x = r.left - c.left, y = r.top - c.top;
+  return { l: x, r: x + r.width, t: y, b: y + r.height, cx: x + r.width / 2, cy: y + r.height / 2 };
+}
+
+// A polyline with rounded corners.
+function path(points, radius = 12) {
+  let d = `M ${points[0][0]} ${points[0][1]}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const [x0, y0] = points[i - 1], [x1, y1] = points[i], [x2, y2] = points[i + 1];
+    const d1 = Math.hypot(x1 - x0, y1 - y0), d2 = Math.hypot(x2 - x1, y2 - y1);
+    const k = Math.min(radius, d1 / 2, d2 / 2);
+    const ax = x1 - (x1 - x0) / d1 * k, ay = y1 - (y1 - y0) / d1 * k;
+    const bx = x1 + (x2 - x1) / d2 * k, by = y1 + (y2 - y1) / d2 * k;
+    d += ` L ${ax} ${ay} Q ${x1} ${y1} ${bx} ${by}`;
+  }
+  const last = points[points.length - 1];
+  return d + ` L ${last[0]} ${last[1]}`;
+}
+
+function wire(points, { color = "#8193ad", dash = false, label = null, at = null, anchor = "middle" } = {}) {
+  const p = document.createElementNS(NS, "path");
+  p.setAttribute("d", path(points));
+  p.setAttribute("fill", "none");
+  p.setAttribute("stroke", color);
+  p.setAttribute("stroke-width", "2");
+  if (dash) p.setAttribute("stroke-dasharray", "6 5");
+  p.setAttribute("marker-end", `url(#head-${color.replace("#", "")})`);
+  svg.appendChild(p);
+  if (label) {
+    const t = document.createElementNS(NS, "text");
+    t.setAttribute("x", at[0]); t.setAttribute("y", at[1]); t.setAttribute("text-anchor", anchor);
+    t.textContent = label;
+    svg.appendChild(t);
+  }
+}
+
+function marker(color) {
+  const m = document.createElementNS(NS, "marker");
+  m.setAttribute("id", `head-${color.replace("#", "")}`);
+  m.setAttribute("viewBox", "0 0 10 10"); m.setAttribute("refX", "9"); m.setAttribute("refY", "5");
+  m.setAttribute("markerWidth", "7"); m.setAttribute("markerHeight", "7"); m.setAttribute("orient", "auto-start-reverse");
+  const tip = document.createElementNS(NS, "path");
+  tip.setAttribute("d", "M 0 0 L 10 5 L 0 10 z"); tip.setAttribute("fill", color);
+  m.appendChild(tip);
+  return m;
+}
+
+function draw() {
+  svg.innerHTML = "";
+  const defs = document.createElementNS(NS, "defs");
+  ["#8193ad", "#00d4aa", "#f87171", "#fbbf24", "#34d399", "#60a5fa"].forEach(c => defs.appendChild(marker(c)));
+  svg.appendChild(defs);
+
+  const tools = box("tools"), pipe = box("pipe");
+  // ways in -> tools
+  for (const id of ["ui", "mcps", "mcpr", "cli"]) { const b = box(id); wire([[b.cx, b.b + 2], [b.cx, tools.t - 3]], { color: "#60a5fa" }); }
+  // tools -> question
+  const q = box("q");
+  wire([[q.cx, tools.b + 2], [q.cx, q.t - 3]], { color: "#60a5fa", label: "ask", at: [q.cx + 10, (tools.b + q.t) / 2 + 4], anchor: "start" });
+
+  // lanes, left to right
+  const chain = (ids, color) => ids.slice(1).forEach((id, i) => {
+    const a = box(ids[i]), b = box(id); wire([[a.r + 2, a.cy], [b.l - 3, b.cy]], { color });
+  });
+  chain(["q", "small", "cond", "cache", "router"]);
+  chain(["vec", "graph", "budget", "examples"], "#00d4aa");
+  chain(["gen", "guard", "exec", "explain", "answer"]);
+
+  // labels on the lane-1 arrows
+  const small = box("small"), cond = box("cond"), cache = box("cache"), router = box("router");
+  svg.appendChild(Object.assign(document.createElementNS(NS, "text"), { textContent: "no" }))
+     .setAttribute("x", (small.r + cond.l) / 2);
+  svg.lastChild.setAttribute("y", small.cy - 8); svg.lastChild.setAttribute("text-anchor", "middle");
+  svg.appendChild(Object.assign(document.createElementNS(NS, "text"), { textContent: "miss" }))
+     .setAttribute("x", (cache.r + router.l) / 2);
+  svg.lastChild.setAttribute("y", cache.cy - 8); svg.lastChild.setAttribute("text-anchor", "middle");
+
+  // wrap: router -> retrieval -> query writer (like reading lines of text)
+  const lane2 = box("lane2box"), vec = box("vec"), examples = box("examples"), gen = box("gen");
+  const lane1 = box("lane1"), lane3 = box("lane3");
+  const leftX = pipe.l + 15, rightX = pipe.r - 15;
+  const gap1 = (lane1.b + lane2.t) / 2, gap2 = (lane2.b + lane3.t) / 2;
+  wire([[router.r + 2, router.cy], [rightX, router.cy], [rightX, gap1], [leftX, gap1], [leftX, vec.cy], [vec.l - 3, vec.cy]], { color: "#00d4aa" });
+  wire([[examples.r + 2, examples.cy], [rightX, examples.cy], [rightX, gap2], [leftX, gap2], [leftX, gen.cy], [gen.l - 3, gen.cy]], { color: "#00d4aa" });
+
+  // self-correction loop: executor -> query writer
+  const exec = box("exec"), guard = box("guard");
+  const loopY = lane3.b + 26;
+  wire([[exec.l + 40, exec.b + 2], [exec.l + 40, loopY], [gen.cx, loopY], [gen.cx, gen.b + 3]],
+       { color: "#f87171", dash: true, label: "error → fixed by the LLM and checked again (max 2 retries)", at: [(gen.cx + exec.l + 40) / 2, loopY - 7] });
+
+  // executor -> databases
+  const busY = (box("datalabel").b + box("sqlite").t) / 2;  // below the label, so no line crosses it
+  for (const id of ["sqlite", "pg", "mongo"]) {
+    const d = box(id);
+    wire([[exec.cx, exec.b + 2], [exec.cx, busY], [d.cx, busY], [d.cx, d.t - 3]], { color: "#34d399" });
+  }
+  document.body.dataset.done = "1";
+}
+
+document.fonts.ready.then(() => requestAnimationFrame(draw));
+window.addEventListener("resize", draw);
+</script>
+</body>
+</html>

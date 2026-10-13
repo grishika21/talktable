@@ -1,0 +1,20 @@
+# Keep secrets, local environments and build junk out of the Docker image.
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.gradio
+.claude
+data/answer_cache.sqlite*
+data/*.tmp
+data/qdrant
+image.png
+docs
+tests
+eval
+docker-compose*.yml

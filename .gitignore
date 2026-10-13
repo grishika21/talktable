@@ -1,0 +1,44 @@
+# Secrets — never commit real credentials
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# SQLite scratch files (data/bookstore.db itself IS committed)
+*.db-journal
+*.db-wal
+*.db-shm
+data/*.tmp
+
+# Gradio / HF caches
+.gradio/
+flagged/
+
+# Editors & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings
+.claude/
+
+# Answer cache (rebuilt automatically)
+data/answer_cache.sqlite*
+
+# Embedded Qdrant vector store (rebuilt automatically)
+data/qdrant/
+
+# Screenshot shared during development
+image.png

@@ -1,0 +1,38 @@
+# TalkTable runtime + dev dependencies (Python 3.11).
+# Hugging Face Spaces installs this file with pip, so keep it pip-compatible.
+
+# CPU-only PyTorch wheels: sentence-transformers needs torch, and the default
+# CUDA build is several GB, too big for a free CPU Space.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# --- Config & models ---------------------------------------------------------
+pydantic==2.12.5              # gradio[mcp] 6.30 caps pydantic at 2.12.5
+pydantic-settings==2.15.0
+python-dotenv==1.2.4
+pyyaml==6.0.3
+
+# --- Databases ---------------------------------------------------------------
+sqlalchemy==2.1.4
+psycopg[binary]==3.3.6           # SQLAlchemy 2.1 uses psycopg 3 for plain postgresql:// URLs
+pymongo==4.18.3
+sqlglot==30.22.0
+pandas==3.0.6
+
+# --- Schema retrieval --------------------------------------------------------
+sentence-transformers==6.1.0
+numpy==2.4.6                  # the in-memory vector store (small schemas)
+qdrant-client==1.19.1         # the persistent vector store (large schemas; embedded or a server)
+networkx==3.6.1               # join paths over the foreign-key graph
+torch
+
+# --- LLM (OpenAI-compatible client: works with Ollama, HF router, and Groq) --
+openai==3.29.0
+
+# --- MCP + UI ----------------------------------------------------------------
+# gradio[mcp] 6.x requires mcp<2, so stay on the 1.x line of the MCP SDK.
+mcp==1.30.0
+gradio[mcp]==6.30.0
+
+# --- Data generation & tests -------------------------------------------------
+faker==40.43.0
+pytest==9.1.1

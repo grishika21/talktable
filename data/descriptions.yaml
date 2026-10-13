@@ -1,0 +1,724 @@
+# Plain-English descriptions of every database, table/collection, and column/field.
+#
+# TalkTable uses this file to:
+#   1. route a question to the database(s) that can answer it, and
+#   2. retrieve only the tables/collections relevant to the question.
+# It is also shown to the LLM when it writes queries, so state units, allowed
+# values, and how tables join. tests/test_data.py checks that every real table/column
+# is described here (and nothing extra is).
+#
+# `few_shot` is a library of worked examples (question -> query). The 3 whose questions are
+# most similar to the user's are shown to the query writer. They are
+# deliberately different from the demo questions in the README. tests/test_pipeline.py
+# runs every one of them through the guardrails and the real database.
+
+shared_keys:
+  book_id: >-
+    Identifies a book. Defined in the SQLite catalog (books.book_id). Also used by
+    Postgres order_items.book_id, Mongo reviews.book_id and Mongo clickstream events.book_id.
+  customer_id: >-
+    Identifies a customer. Defined in Postgres (customers.customer_id). Also used by
+    Mongo reviews.customer_id and Mongo clickstream.customer_id.
+
+# Extra hints for the router, about where things live.
+routing_notes:
+  - >-
+    A book's price, title, author, category, pages and publication year are catalog
+    facts (sqlite). The sales database only holds what customers paid and how many
+    copies they bought.
+  - >-
+    Questions that need book titles together with sales or review figures need two
+    databases: the catalog plus sales or engagement.
+  - >-
+    Book formats and their prices (paperback, hardcover, ebook, audiobook), publishers,
+    ISBNs, series, literary awards and tags are catalog facts (sqlite). Payments,
+    shipping and carriers, returns and refunds, coupons, warehouses and stock levels,
+    loyalty tiers and support tickets are sales (postgres). Wishlists, site searches,
+    recommendations and email campaigns are engagement (mongo).
+
+# Business terms. When a question uses one (or one of its `also` spellings), its meaning
+# is added to the query-writing prompt, so everyone gets the same definition of e.g.
+# "revenue". `databases` says which database the definition applies to.
+glossary:
+  - term: revenue
+    also: [income, earnings, turnover]
+    databases: [postgres]
+    meaning: >-
+      Money from orders that were not cancelled or returned:
+      SUM(orders.total_amount) over orders with status NOT IN ('cancelled', 'returned').
+      Revenue per book is SUM(order_items.quantity * order_items.unit_price) over those orders.
+  - term: bestseller
+    also: [best-selling, best selling, top-selling, top selling]
+    databases: [postgres]
+    meaning: >-
+      The books with the most copies sold: SUM(order_items.quantity) over orders that
+      were not cancelled or returned, grouped by book_id.
+  - term: average order value
+    also: [AOV]
+    databases: [postgres]
+    meaning: AVG(orders.total_amount) over orders that were not cancelled or returned.
+  - term: repeat customer
+    also: [returning customer, repeat buyer, loyal customer]
+    databases: [postgres]
+    meaning: A customer with more than one order (COUNT of their orders > 1).
+  - term: new customer
+    also: [signup, sign-up, sign up, signed up, new signup, registered]
+    databases: [postgres]
+    meaning: A customer whose signup_date falls in the period the question asks about.
+  - term: negative review
+    also: [bad review, poor review, low rating, low-rated]
+    databases: [mongo]
+    meaning: A review with rating <= 2.
+  - term: positive review
+    also: [good review, high rating, highly rated, top-rated]
+    databases: [mongo]
+    meaning: A review with rating >= 4.
+  - term: helpful review
+    also: [most helpful]
+    databases: [mongo]
+    meaning: Rank reviews by helpful_votes, highest first.
+  - term: conversion
+    also: [converted session, conversion rate, converting session]
+    databases: [mongo]
+    meaning: >-
+      A clickstream session whose events include at least one event with type 'purchase'.
+      Conversion rate = converted sessions / all sessions.
+  - term: cart abandonment
+    also: [abandoned cart, abandoned session]
+    databases: [mongo]
+    meaning: A clickstream session with an 'add_to_cart' event but no 'purchase' event.
+  - term: bounce
+    also: [bounced session, bounce rate]
+    databases: [mongo]
+    meaning: A clickstream session with exactly one event (the events array has size 1).
+
+databases:
+  sqlite:
+    title: Book catalog
+    kind: sql
+    summary: >-
+      The product catalog of an online bookstore: every book with its title, list
+      price, page count and publication year, its author (name, country, birth year)
+      and category/genre; the editions it is published in (paperback, hardcover, ebook,
+      audiobook) with their publisher, ISBN and price; book series; literary awards and
+      which books won or were shortlisted; and descriptive tags. Use it for questions
+      about books, authors, genres, publishers, formats, prices, series, awards and
+      tags. It has no sales, customer or review data.
+    examples:
+      - Which books cost more than $50?
+      - Which authors have written the most books?
+      - How many books are in each category?
+      - What is the average price of fantasy books?
+      - Which publisher has the most audiobooks?
+      - Which books won the Starfall Award?
+    few_shot:
+      - question: How many books are in each category?
+        query: >-
+          SELECT c.name AS category, COUNT(*) AS books FROM books b
+          JOIN categories c ON c.category_id = b.category_id
+          GROUP BY c.name ORDER BY books DESC LIMIT 20
+      - question: Which 5 authors have written the most Fantasy books?
+        query: >-
+          SELECT a.name AS author, COUNT(*) AS fantasy_books FROM books b
+          JOIN authors a ON a.author_id = b.author_id
+          JOIN categories c ON c.category_id = b.category_id
+          WHERE c.name = 'Fantasy' GROUP BY a.author_id, a.name
+          ORDER BY fantasy_books DESC LIMIT 5
+      - question: How many books were published each year since 2020?
+        query: >-
+          SELECT published_year, COUNT(*) AS books FROM books
+          WHERE published_year >= 2020 GROUP BY published_year
+          ORDER BY published_year LIMIT 50
+      - question: What is the average hardcover price per publisher?
+        query: >-
+          SELECT p.name AS publisher, ROUND(AVG(e.price), 2) AS avg_hardcover_price
+          FROM editions e JOIN publishers p ON p.publisher_id = e.publisher_id
+          WHERE e.format = 'hardcover' GROUP BY p.publisher_id, p.name
+          ORDER BY avg_hardcover_price DESC LIMIT 25
+      - question: Which 5 books have won the most awards?
+        query: >-
+          SELECT b.title, COUNT(*) AS wins FROM book_awards ba
+          JOIN books b ON b.book_id = ba.book_id
+          WHERE ba.result = 'winner' GROUP BY b.book_id, b.title
+          ORDER BY wins DESC LIMIT 5
+      - question: Which series has the longest books on average?
+        query: >-
+          SELECT s.name AS series, ROUND(AVG(b.pages)) AS avg_pages, COUNT(*) AS books
+          FROM book_series bs JOIN series s ON s.series_id = bs.series_id
+          JOIN books b ON b.book_id = bs.book_id
+          GROUP BY s.series_id, s.name ORDER BY avg_pages DESC LIMIT 10
+      - question: Which 10 tags are used most on Romance books?
+        query: >-
+          SELECT t.name AS tag, COUNT(*) AS books FROM book_tags bt
+          JOIN tags t ON t.tag_id = bt.tag_id
+          JOIN books b ON b.book_id = bt.book_id
+          JOIN categories c ON c.category_id = b.category_id
+          WHERE c.name = 'Romance' GROUP BY t.tag_id, t.name
+          ORDER BY books DESC LIMIT 10
+      - question: How many editions of each format were released per year since 2024?
+        query: >-
+          SELECT release_year, format, COUNT(*) AS editions FROM editions
+          WHERE release_year >= 2024 GROUP BY release_year, format
+          ORDER BY release_year, format LIMIT 50
+    tables:
+      authors:
+        description: The writers of the books in the catalog, one row per author.
+        columns:
+          author_id: Primary key of the author.
+          name: Full name of the author, e.g. 'Indira Bhatnagar'.
+          country: >-
+            Author's country of origin, written out in full, e.g. 'United States',
+            'United Kingdom', 'India', 'France', 'Japan'.
+          birth_year: Year the author was born (between 1925 and 1998).
+        questions:
+          - Which authors are from Japan?
+          - Which author has written the most books?
+      categories:
+        description: >-
+          The 15 book categories (genres): Fiction, Mystery, Thriller, Science Fiction,
+          Fantasy, Romance, Historical Fiction, Horror, Biography, History, Science,
+          Self-Help, Business, Children's, Poetry.
+        columns:
+          category_id: Primary key of the category.
+          name: Category name, e.g. 'Fantasy' or 'Self-Help'.
+        questions:
+          - How many books are in each category?
+          - Which genre has the most expensive books?
+      books:
+        description: >-
+          Every book the store sells, one row per book. Join to authors on author_id
+          and to categories on category_id.
+        columns:
+          book_id: Primary key of the book. Shared key used by the sales and engagement databases.
+          title: >-
+            Book title. Special editions end with " (Collector's Edition)" and are much
+            more expensive.
+          author_id: The author who wrote the book (references authors.author_id).
+          category_id: The book's category/genre (references categories.category_id).
+          price: Current list price in US dollars (roughly 6 to 111).
+          published_year: Year the book was first published (1970 to 2026).
+          pages: Number of pages.
+        questions:
+          - What are the 5 most expensive books?
+          - Which books have more than 500 pages?
+      publishers:
+        description: >-
+          The publishing houses that publish the books' editions, one row per publisher.
+          Join to editions on publisher_id.
+        columns:
+          publisher_id: Primary key of the publisher.
+          name: Publisher name, e.g. 'Harbor Lane Press' or 'SoundPage Audio' (an audiobook publisher).
+          country: Country the publisher is based in, e.g. 'United States', 'United Kingdom', 'India'.
+          founded_year: Year the publisher was founded (1884 to 2015).
+        questions:
+          - Which publisher publishes the most books?
+          - Which publishers are based in India?
+      editions:
+        description: >-
+          The editions (formats) each book is sold in, one row per book per format; every
+          book has a paperback edition, many also hardcover, ebook and/or audiobook. Join to
+          books on book_id and to publishers on publisher_id.
+        columns:
+          edition_id: Primary key of the edition.
+          book_id: The book (references books.book_id).
+          publisher_id: The publisher of this edition (references publishers.publisher_id).
+          format: "Format, one of: 'paperback', 'hardcover', 'ebook', 'audiobook'."
+          isbn13: The edition's 13-digit ISBN (text).
+          release_year: Year this edition was released (1970 to 2026).
+          price: >-
+            Price of this edition in US dollars (3.99 to 176.99). The paperback is about the
+            book's list price (books.price); hardcovers cost more, ebooks less.
+        questions:
+          - What is the average price of ebooks?
+          - Which books are available as audiobooks?
+          - How many hardcover editions does each publisher have?
+      series:
+        description: Book series (e.g. 'The Clockmaker Chronicles'), one row per series. Join to book_series on series_id.
+        columns:
+          series_id: Primary key of the series.
+          name: Name of the series.
+        questions:
+          - Which series has the most books?
+          - What series are there?
+      book_series:
+        description: >-
+          Which books belong to which series, and their order within it, one row per book in
+          a series (most books are not in any series). Join to books on book_id and to series
+          on series_id.
+        columns:
+          book_id: The book (references books.book_id); a book is in at most one series.
+          series_id: The series (references series.series_id).
+          position: The book's number within the series (1 = first book, up to 5).
+        questions:
+          - What is the first book of each series?
+          - Which authors have written a series?
+      awards:
+        description: >-
+          Literary awards, one row per award, e.g. 'Starfall Award' (science fiction and
+          fantasy) or 'Iron Lantern Dagger' (mystery and thriller). Join to book_awards on award_id.
+        columns:
+          award_id: Primary key of the award.
+          name: >-
+            Award name: 'Golden Quill Prize', 'Starfall Award', 'Iron Lantern Dagger',
+            'Heartstrings Medal', 'Midnight Ink Award', 'True Story Prize', 'Lumen Science
+            Book Prize', 'Open Door Award', 'Ledger Business Book Award', 'Little Lantern
+            Medal', "Readers' Choice Award".
+          organization: The organisation that gives the award.
+          country: Country of the organisation, spelled out, e.g. 'United States', 'United Kingdom', 'Germany'.
+          first_year: Year the award was first given.
+        questions:
+          - Which awards are given in the United Kingdom?
+          - When was the Golden Quill Prize first awarded?
+      book_awards:
+        description: >-
+          Award results: one row per book per award per year, when the book was
+          shortlisted for or won that award. Join to books on book_id and to awards on award_id.
+        columns:
+          book_award_id: Primary key of the award result.
+          book_id: The book (references books.book_id).
+          award_id: The award (references awards.award_id).
+          year: Year of the award (1990 to 2025).
+          result: "'winner' or 'shortlisted'. Each award has at most one winner per year."
+        questions:
+          - Which books won the Starfall Award?
+          - Which author has won the most awards?
+          - How many books were shortlisted in 2024?
+      tags:
+        description: >-
+          Descriptive tags, one row per tag, e.g. 'bestseller', 'staff pick', 'award winner',
+          'debut', 'classic', 'page-turner', 'cozy', 'book club pick'. Join to book_tags on tag_id.
+        columns:
+          tag_id: Primary key of the tag.
+          name: Tag name (lowercase), e.g. 'staff pick' or 'short read'.
+        questions:
+          - Which tags are most common?
+          - What tags are there?
+      book_tags:
+        description: >-
+          Which tags each book has, one row per book per tag (a book has 1 to 6 tags). Join to
+          books on book_id and to tags on tag_id.
+        columns:
+          book_id: The book (references books.book_id).
+          tag_id: The tag (references tags.tag_id).
+        questions:
+          - Which books are tagged 'staff pick'?
+          - How many 'page-turner' books are in each category?
+
+  postgres:
+    title: Sales
+    kind: sql
+    summary: >-
+      Sales and operations records of the online bookstore: registered customers
+      (name, email, city, sign-up date), their orders (date, status, total amount)
+      and the books in each order; the payment for each order; shipments and the
+      carriers that delivered them; returns and refunds; discount coupons; warehouses
+      and their stock of each book; the loyalty programme (tiers, points); and
+      customer support tickets. Use it for questions about customers, orders, revenue,
+      units sold, payments, shipping, returns, coupons, stock, loyalty and support.
+      Covers January 2022 to September 2026.
+    examples:
+      - How many orders were cancelled in 2024?
+      - Which cities have the most customers?
+      - What was the total revenue in 2024?
+      - Who are the top 10 customers by total spend?
+      - Which carrier delivers the fastest?
+      - What is the most common reason for returns?
+    few_shot:
+      - question: What was the total revenue per year, excluding cancelled and returned orders?
+        query: >-
+          SELECT EXTRACT(YEAR FROM order_date)::int AS year, ROUND(SUM(total_amount), 2) AS revenue
+          FROM orders WHERE status NOT IN ('cancelled', 'returned')
+          GROUP BY 1 ORDER BY 1 LIMIT 20
+      - question: Who are the 3 customers who placed the most orders?
+        query: >-
+          SELECT c.name, COUNT(*) AS orders FROM orders o
+          JOIN customers c ON c.customer_id = o.customer_id
+          GROUP BY c.customer_id, c.name ORDER BY orders DESC LIMIT 3
+      - question: Which 5 books sold the most copies in 2024?
+        query: >-
+          SELECT oi.book_id, SUM(oi.quantity) AS copies_sold FROM order_items oi
+          JOIN orders o ON o.order_id = oi.order_id
+          WHERE o.order_date >= DATE '2024-01-01' AND o.order_date < DATE '2025-01-01'
+            AND o.status <> 'cancelled'
+          GROUP BY oi.book_id ORDER BY copies_sold DESC LIMIT 5
+      - question: How many shipments did each carrier deliver in 2025?
+        query: >-
+          SELECT c.name AS carrier, COUNT(*) AS delivered FROM shipments s
+          JOIN carriers c ON c.carrier_id = s.carrier_id
+          WHERE s.status = 'delivered' AND s.delivered_date >= DATE '2025-01-01'
+            AND s.delivered_date < DATE '2026-01-01'
+          GROUP BY c.carrier_id, c.name ORDER BY delivered DESC LIMIT 10
+      - question: How much was refunded for returns each month in 2025?
+        query: >-
+          SELECT to_char(return_date, 'YYYY-MM') AS month, ROUND(SUM(refund_amount), 2) AS refunded
+          FROM returns WHERE return_date >= DATE '2025-01-01' AND return_date < DATE '2026-01-01'
+          GROUP BY 1 ORDER BY 1 LIMIT 12
+      - question: How many orders used each coupon in 2024?
+        query: >-
+          SELECT cp.code, COUNT(*) AS orders FROM order_coupons oc
+          JOIN coupons cp ON cp.coupon_id = oc.coupon_id
+          JOIN orders o ON o.order_id = oc.order_id
+          WHERE o.order_date >= DATE '2024-01-01' AND o.order_date < DATE '2025-01-01'
+          GROUP BY cp.coupon_id, cp.code ORDER BY orders DESC LIMIT 20
+      - question: Which warehouse has the most books below their reorder level?
+        query: >-
+          SELECT w.name AS warehouse, COUNT(*) AS books_to_reorder FROM inventory i
+          JOIN warehouses w ON w.warehouse_id = i.warehouse_id
+          WHERE i.quantity_on_hand < i.reorder_level
+          GROUP BY w.warehouse_id, w.name ORDER BY books_to_reorder DESC LIMIT 10
+      - question: What is the average order value for each loyalty tier?
+        query: >-
+          SELECT la.tier, COUNT(*) AS orders, ROUND(AVG(o.total_amount), 2) AS avg_order_value
+          FROM orders o JOIN loyalty_accounts la ON la.customer_id = o.customer_id
+          GROUP BY la.tier ORDER BY avg_order_value DESC LIMIT 10
+      - question: How many support tickets were opened per category in 2025, and how many are still open?
+        query: >-
+          SELECT category, COUNT(*) AS tickets, COUNT(*) FILTER (WHERE resolved_at IS NULL) AS still_open
+          FROM support_tickets
+          WHERE opened_at >= TIMESTAMP '2025-01-01' AND opened_at < TIMESTAMP '2026-01-01'
+          GROUP BY category ORDER BY tickets DESC LIMIT 10
+    tables:
+      customers:
+        description: Registered customers of the store, one row per customer.
+        columns:
+          customer_id: Primary key of the customer. Shared key used by the engagement database.
+          name: Customer's full name.
+          email: Customer's email address (fictional, at example.com/.org/.net domains).
+          city: >-
+            City the customer lives in, e.g. 'New York', 'London', 'Toronto',
+            'Bengaluru', 'Sydney', 'Berlin'.
+          signup_date: Date the customer registered (2022-01-01 to 2026-09-30).
+        questions:
+          - Which city has the most customers?
+          - How many customers signed up in 2024?
+      orders:
+        description: >-
+          One row per order placed by a customer. Join to customers on customer_id and
+          to order_items on order_id.
+        columns:
+          order_id: Primary key of the order. Order IDs increase with order_date.
+          customer_id: The customer who placed the order (references customers.customer_id).
+          order_date: Date the order was placed (a DATE, from 2022-01 to 2026-09-30).
+          status: >-
+            Order status, one of: 'processing', 'shipped', 'delivered', 'cancelled',
+            'returned'. Most orders are 'delivered'. Only filter on status when the
+            question asks for it, or when it asks about revenue (then exclude
+            'cancelled' and 'returned' orders).
+          total_amount: >-
+            Order total in US dollars, equal to the sum of quantity * unit_price over the
+            order's items.
+        questions:
+          - How many orders were placed each month in 2025?
+          - What was the total revenue in 2024?
+      order_items:
+        description: >-
+          The individual books within each order, one row per book per order. Join to
+          orders on order_id. book_id refers to books in the SQLite catalog (that table
+          is in a different database, so it can't be joined in SQL here).
+        columns:
+          order_item_id: Primary key of the order line.
+          order_id: The order this line belongs to (references orders.order_id).
+          book_id: The book that was bought (the catalog's books.book_id).
+          quantity: Number of copies bought (1 to 3).
+          unit_price: >-
+            Price paid per copy in US dollars, after any discount. Line revenue is
+            quantity * unit_price.
+        questions:
+          - Which books sold the most copies?
+          - What is the average number of books per order?
+      payments:
+        description: >-
+          The payment for each order, one row per order. Join to orders on order_id.
+        columns:
+          payment_id: Primary key of the payment.
+          order_id: The order paid for (references orders.order_id).
+          method: "Payment method: 'card', 'paypal', 'gift_card' or 'bank_transfer'."
+          amount: Amount paid in US dollars (equal to the order's total_amount).
+          paid_at: Date and time of the payment (TIMESTAMP).
+          status: >-
+            'paid', 'refunded' (cancelled or returned orders) or 'failed' (some cancelled
+            orders).
+        questions:
+          - Which payment method is used most?
+          - How much money was refunded in 2025?
+      carriers:
+        description: The delivery companies that ship orders, one row per carrier. Join to shipments on carrier_id.
+        columns:
+          carrier_id: Primary key of the carrier.
+          name: "Carrier name: 'SwiftShip', 'ParcelPro', 'GlobalPost', 'NorthStar Freight', 'QuickDrop', 'OceanAir Logistics'."
+        questions:
+          - Which carrier ships the most orders?
+      shipments:
+        description: >-
+          Deliveries of shipped orders, one row per shipped order (delivered or still in
+          transit). Join to orders on order_id and to carriers on carrier_id.
+        columns:
+          shipment_id: Primary key of the shipment.
+          order_id: The order shipped (references orders.order_id).
+          carrier_id: The carrier that delivered it (references carriers.carrier_id).
+          shipped_date: Date the order left the warehouse (DATE).
+          delivered_date: >-
+            Date it was delivered (DATE); NULL while still in transit. Delivery time in
+            days is delivered_date - shipped_date.
+          status: "'delivered' or 'in_transit'."
+        questions:
+          - Which carrier delivers the fastest?
+          - What is the average delivery time in days?
+          - How many orders are still in transit?
+      returns:
+        description: >-
+          Returned books, one row per returned order line (only orders with status
+          'returned'). Join to order_items on order_item_id, then to orders on order_id.
+        columns:
+          return_id: Primary key of the return.
+          order_item_id: The returned order line (references order_items.order_item_id).
+          reason: "Why it was returned: 'damaged', 'wrong item', 'not as described', 'changed mind', 'arrived late'."
+          refund_amount: Refund in US dollars (quantity * unit_price of the line).
+          return_date: Date the return was received (DATE).
+        questions:
+          - What is the most common reason for returns?
+          - How much was refunded for damaged books?
+          - Which books are returned most often?
+      coupons:
+        description: >-
+          Discount coupon codes, one row per coupon, each valid for a period. Join to
+          order_coupons on coupon_id.
+        columns:
+          coupon_id: Primary key of the coupon.
+          code: Coupon code, e.g. 'WELCOME10', 'SPRING24', 'HOLIDAY25'.
+          discount_pct: Discount in percent (10 to 25).
+          valid_from: First day the coupon can be used (DATE).
+          valid_to: Last day the coupon can be used (DATE).
+        questions:
+          - Which coupons give the biggest discount?
+      order_coupons:
+        description: >-
+          Which coupon was used on an order, one row per order that used a coupon (most
+          orders used none). Join to orders on order_id and to coupons on coupon_id.
+        columns:
+          order_id: The order (references orders.order_id).
+          coupon_id: The coupon used (references coupons.coupon_id).
+        questions:
+          - Which coupon code was used most?
+          - How many orders used a coupon in 2025?
+      warehouses:
+        description: The store's warehouses, one row per warehouse. Join to inventory on warehouse_id.
+        columns:
+          warehouse_id: Primary key of the warehouse.
+          name: Warehouse name, e.g. 'Newark Distribution Center'.
+          city: City of the warehouse, e.g. 'Newark', 'Reno', 'Milton Keynes', 'Toronto', 'Pune'.
+          country: "Country of the warehouse, spelled out: 'United States', 'United Kingdom', 'Canada' or 'India'."
+        questions:
+          - Which warehouses are in the United States?
+      inventory:
+        description: >-
+          Current stock of each book in each warehouse, one row per book per warehouse that
+          stocks it. Join to warehouses on warehouse_id. book_id refers to books in the
+          SQLite catalog (not joinable in SQL here).
+        columns:
+          warehouse_id: The warehouse (references warehouses.warehouse_id).
+          book_id: The book (the catalog's books.book_id).
+          quantity_on_hand: Copies in stock now (0 = out of stock).
+          reorder_level: Restock when quantity_on_hand falls below this number.
+          last_restocked: Date of the last restock (DATE, 2026).
+        questions:
+          - Which books are out of stock?
+          - Which warehouse holds the most copies?
+          - Which books are below their reorder level?
+      loyalty_accounts:
+        description: >-
+          Members of the loyalty programme, one row per member customer (not every customer
+          is a member). Join to customers on customer_id.
+        columns:
+          customer_id: The member (references customers.customer_id).
+          tier: "Loyalty tier: 'bronze', 'silver', 'gold' or 'platinum' (based on points)."
+          points: Loyalty points balance (0 to about 8000).
+          joined_date: Date the customer joined the programme (DATE).
+        questions:
+          - How many members are in each loyalty tier?
+          - Which gold members spent the most?
+      support_tickets:
+        description: >-
+          Customer support requests, one row per ticket. Join to customers on customer_id
+          and, when the ticket is about an order, to orders on order_id.
+        columns:
+          ticket_id: Primary key of the ticket.
+          customer_id: The customer who asked for help (references customers.customer_id).
+          order_id: The order the ticket is about (references orders.order_id); NULL for account questions.
+          category: "Topic: 'delivery', 'payment', 'damaged item', 'refund', 'account' or 'other'."
+          opened_at: When the ticket was opened (TIMESTAMP).
+          resolved_at: When it was resolved (TIMESTAMP); NULL while still open.
+          satisfaction: Customer rating of the support, 1 (bad) to 5 (great); NULL if not rated.
+        questions:
+          - What is the average satisfaction per ticket category?
+          - How many support tickets are still open?
+          - How long does it take to resolve a ticket on average?
+
+  mongo:
+    title: Customer engagement
+    kind: mongo
+    summary: >-
+      Customer engagement data of the online bookstore: book reviews with 1-5 star
+      ratings and text; website browsing sessions (clickstream) with the events in
+      each session and the device used; customers' wishlists; site search queries and
+      what was clicked; personalised book recommendations; and email marketing
+      campaigns with their open and click counts. Use it for questions about ratings,
+      reviews, browsing, devices, conversion, wishlists, searches, recommendations and
+      email campaigns.
+    examples:
+      - Which books have the best average rating?
+      - What is the average rating per book?
+      - How many sessions came from mobile devices?
+      - Which books are added to the cart most often?
+      - Which books are on the most wishlists?
+      - What do people search for most?
+    few_shot:
+      - question: What is the average rating of book 42, and how many reviews does it have?
+        query: >-
+          {"collection": "reviews", "pipeline": [
+            {"$match": {"book_id": 42}},
+            {"$group": {"_id": "$book_id", "avg_rating": {"$avg": "$rating"}, "reviews": {"$sum": 1}}},
+            {"$limit": 1}]}
+      - question: Which 5 books were added to the cart most often in 2026?
+        query: >-
+          {"collection": "clickstream", "pipeline": [
+            {"$unwind": "$events"},
+            {"$match": {"events.type": "add_to_cart", "events.ts": {"$gte": {"$date": "2026-01-01T00:00:00Z"}}}},
+            {"$group": {"_id": "$events.book_id", "cart_adds": {"$sum": 1}}},
+            {"$sort": {"cart_adds": -1}},
+            {"$limit": 5}]}
+      - question: How many browsing sessions came from each device?
+        query: >-
+          {"collection": "clickstream", "pipeline": [
+            {"$group": {"_id": "$device", "sessions": {"$sum": 1}}},
+            {"$sort": {"sessions": -1}},
+            {"$limit": 10}]}
+      - question: How many books were added to wishlists each month in 2026?
+        query: >-
+          {"collection": "wishlists", "pipeline": [
+            {"$unwind": "$items"},
+            {"$match": {"items.added_at": {"$gte": {"$date": "2026-01-01T00:00:00Z"}}}},
+            {"$group": {"_id": {"$dateToString": {"format": "%Y-%m", "date": "$items.added_at"}}, "books_added": {"$sum": 1}}},
+            {"$sort": {"_id": 1}},
+            {"$limit": 12}]}
+      - question: What are the 10 most common searches on mobile?
+        query: >-
+          {"collection": "search_logs", "pipeline": [
+            {"$match": {"device": "mobile"}},
+            {"$group": {"_id": "$query", "searches": {"$sum": 1}}},
+            {"$sort": {"searches": -1}},
+            {"$limit": 10}]}
+      - question: What is the average score of the top-ranked recommendation for each model?
+        query: >-
+          {"collection": "recommendations", "pipeline": [
+            {"$unwind": "$items"},
+            {"$match": {"items.rank": 1}},
+            {"$group": {"_id": "$model", "avg_top_score": {"$avg": "$items.score"}, "lists": {"$sum": 1}}},
+            {"$sort": {"avg_top_score": -1}},
+            {"$limit": 10}]}
+      - question: How many emails were opened per campaign theme in 2025?
+        query: >-
+          {"collection": "email_campaigns", "pipeline": [
+            {"$match": {"sent_at": {"$gte": {"$date": "2025-01-01T00:00:00Z"}, "$lt": {"$date": "2026-01-01T00:00:00Z"}}}},
+            {"$group": {"_id": "$theme", "opened": {"$sum": "$opened"}, "sent": {"$sum": "$audience_size"}}},
+            {"$sort": {"opened": -1}},
+            {"$limit": 20}]}
+      - question: What share of searches end with a click on a book?
+        query: >-
+          {"collection": "search_logs", "pipeline": [
+            {"$group": {"_id": null, "searches": {"$sum": 1},
+                        "clicked": {"$sum": {"$cond": [{"$ne": ["$clicked_book_id", null]}, 1, 0]}}}},
+            {"$project": {"_id": 0, "searches": 1, "clicked": 1, "click_rate": {"$divide": ["$clicked", "$searches"]}}},
+            {"$limit": 1}]}
+    collections:
+      reviews:
+        description: >-
+          Book reviews written by customers who bought and received the book, one
+          document per review.
+        fields:
+          book_id: The reviewed book (the catalog's books.book_id), integer.
+          customer_id: The customer who wrote the review (sales customers.customer_id), integer.
+          rating: Star rating, an integer from 1 (worst) to 5 (best).
+          text: The review text written by the customer.
+          created_at: Date and time the review was posted (BSON date, 2022 to 2026-09-30).
+          helpful_votes: Number of other shoppers who marked the review as helpful (integer, 0 or more).
+        questions:
+          - Which 5 books have the most 1-star reviews?
+          - What is the average rating per book?
+      clickstream:
+        description: >-
+          Website browsing sessions, one document per session, with an array of the
+          events in that session in time order. Covers 2025-01-01 to 2026-09-30. To
+          analyse individual events, $unwind "$events".
+        fields:
+          customer_id: The logged-in customer (sales customers.customer_id), integer.
+          session_id: Unique session identifier (UUID string).
+          device: "Device used for the session: 'mobile', 'desktop' or 'tablet'."
+          events: Array of the session's events, ordered by time.
+          events.type: >-
+            Event type, one of: 'view' (opened a book page), 'wishlist', 'add_to_cart',
+            'remove_from_cart', 'purchase'.
+          events.book_id: The book the event is about (the catalog's books.book_id), integer.
+          events.ts: When the event happened (BSON date).
+        questions:
+          - How many sessions came from mobile devices?
+          - Which books are added to the cart most often?
+      wishlists:
+        description: >-
+          Customers' wishlists, one document per customer who has one, with an array of the
+          wished-for books. To analyse individual books, $unwind "$items".
+        fields:
+          customer_id: The customer (sales customers.customer_id), integer.
+          items: Array of wished-for books, oldest first.
+          items.book_id: A wished-for book (the catalog's books.book_id), integer.
+          items.added_at: When the book was added to the wishlist (BSON date).
+          updated_at: When the wishlist last changed (BSON date).
+        questions:
+          - Which books are on the most wishlists?
+          - How many books does the average wishlist have?
+      search_logs:
+        description: >-
+          Searches made on the store's website, one document per search, 2025-01-01 to
+          2026-09-30.
+        fields:
+          customer_id: The logged-in customer (sales customers.customer_id); null for guests.
+          query: The search text (lowercase), e.g. 'dragon' or 'mystery books'.
+          results_count: Number of results shown (0 = no results).
+          clicked_book_id: The book the user clicked in the results (the catalog's books.book_id); null if none.
+          device: "'mobile', 'desktop' or 'tablet'."
+          ts: When the search happened (BSON date).
+        questions:
+          - What do people search for most?
+          - How many searches returned no results?
+          - Which books are clicked most from search?
+      recommendations:
+        description: >-
+          Personalised book recommendations shown to customers, one document per
+          recommendation list (5 books, best first). To analyse individual books, $unwind "$items".
+        fields:
+          customer_id: The customer (sales customers.customer_id), integer.
+          model: "Recommendation model: 'collaborative', 'content_based' or 'trending'."
+          generated_at: When the list was generated (BSON date, 2025-06 to 2026-09).
+          items: Array of the 5 recommended books.
+          items.book_id: A recommended book (the catalog's books.book_id), integer.
+          items.rank: Position in the list, 1 to 5.
+          items.score: Model score between 0 and 1 (higher = more relevant).
+        questions:
+          - Which books are recommended most often?
+          - How many recommendation lists did each model generate?
+      email_campaigns:
+        description: >-
+          Marketing emails sent to customers, one document per campaign (June 2023 to
+          September 2026).
+        fields:
+          campaign_id: Campaign number, integer.
+          name: Campaign name, e.g. 'Summer Reading July 2024'.
+          theme: Campaign theme, e.g. 'New Releases', 'Holiday Gift Guide', 'Mystery Month'.
+          sent_at: When the campaign was sent (BSON date).
+          audience_size: Number of customers it was sent to.
+          opened: Number of recipients who opened it.
+          clicked: Number of recipients who clicked a link in it.
+          featured_book_ids: Array of the featured books (the catalog's books.book_id), integers.
+        questions:
+          - Which campaign had the best open rate?
+          - How many emails were sent per theme?
